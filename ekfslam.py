@@ -8,40 +8,18 @@ dt = 0.1
 time = np.arange(0, 20, dt)
 LANDMARKS = np.array([[6., 4.]])
 
-def measure(dt, x, Q, noise=False):
+def measure(dt, x, Q=None, noise=False):
     z = np.zeros([2 * LANDMARKS.shape[0]])
 
     for i, m in enumerate(LANDMARKS):
         q = (m[0] - x[0]) ** 2 + (m[1] - x[1]) ** 2
         z[i * 2] = np.sqrt(q)
         z[i * 2 + 1] = np.arctan2(m[1] - x[1], m[0] - x[0]) - x[2]
-
-    z = np.random.multivariate_normal(z, Q) if noise else z
+        z[i * 2 + 1] = np.random.multivariate_normal(z[i * 2 + 1], Q) if noise else z[i * 2 + 1]
 
     return z
 
-def dfdx(xu, dt):
-    v = u[0]
-    w = u[1]
-
-    return G
-
-def dgdu(u, dt):
-    v = u[0]
-    w = u[1]
-
-    theta = self.x[2]
-    st = np.sin(theta)
-    ct = np.cos(theta)
-    st_pw = np.sin(theta + w * dt)
-    ct_pw = np.cos(theta + w * dt)
-
-    V = np.array([[1./w * (-st + st_pw), v/(w*w) * (st - st_pw) + v/w * ct_pw*dt],
-                  [1./w * (ct-ct_pw), -v/(w*w)*(ct - ct_pw) + v/w * (st_pw*dt)],
-                  [0., dt]])
-    return V
-
-def dynamics(dt, x, u, noise, alphas=[0.01, 0.01, 0.001, 0.001]):
+def dynamics(dt, x, u, noise, alphas=np.array([0.01, 0.001, 0.01, 0.001])):
     noise_v = (np.random.randn() * (alphas[0] * u[0] ** 2 + alphas[1] * u[1] ** 2)) if noise else 0
     noise_omega = (np.random.randn() * (alphas[2] * u[0] ** 2 + alphas[3] * u[1] ** 2)) if noise else 0
     v, omega = u[0] + noise_v, u[1] + noise_omega
@@ -51,11 +29,18 @@ def dynamics(dt, x, u, noise, alphas=[0.01, 0.01, 0.001, 0.001]):
     py += v / omega * np.cos(theta) - v / omega * np.cos(theta + omega * dt)
     theta += omega * dt
 
-    dfdx = np.eye(3)
+    dfdx = np.eye(3 + 2 * len(LANDMARKS))
     dfdx[0:2,2] = np.array([v / omega * (-np.cos(x[2]) + np.cos(x[2] + omega * dt)),
                             v / omega * (-np.sin(x[2]) + np.sin(x[2] + omega * dt))])
 
-    return np.array([px, py, theta] + ([0] * (2 * len(LANDMARKS)))), dfdx
+    dfdu = np.zeros([3 + 2 * len(LANDMARKS), 2])
+    dfdu[:3, :2] = np.array([[(-np.sin(theta) + np.sin(theta + omega * dt))/omega, v * (np.sin(theta) - np.sin(theta + omega * dt))/(omega**2) + (v * np.cos(theta + omega * dt) * dt)/omega],
+                     [(np.cos(theta) - np.cos(theta + omega * dt))/omega, -v * (np.cos(theta) - np.cos(theta + omega * dt)) / (omega ** 2) + (v * np.sin(theta + omega * dt) * dt) / omega],
+                     [0, dt]])
+
+    M = np.array([[alphas[0] * v**2 + alphas[1] * omega ** 2, 0], [0, alphas[2] * v**2 + alphas[3] * omega ** 2]])
+
+    return np.array([px, py, theta] + ([0] * (2 * len(LANDMARKS)))), dfdx, dfdu, M
 
 
 def control(t, x):
@@ -68,20 +53,21 @@ class EKFSLAM:
     def __init__(self, Q):
         self.state_dim = 3 + 2 * len(LANDMARKS)
         self.x_hat = np.zeros([self.state_dim])
-        self.F = np.zeros([3, self.state_dim])
-        self.F[0:3, 0:3] = np.eye(3)
         self.Q = Q
         self.P = scipy.linalg.block_diag(np.eye(3) * 0.0, np.eye(self.state_dim - 3) * 1e10)
 
     def propagate(self, dt, u, dynamics):
-        self.x_hat, dfdx = dynamics(dt, self.x_hat, u, noise=False)
+        self.x_hat, G, V, R = dynamics(dt, self.x_hat, u, noise=False)
 
-        G = np.eye(self.state_dim) + self.F.T.dot(dfdx).dot(self.F)
-        self.P = G.dot(self.P).dot(G.T) + self.F.T.dot(np.eye(3)).dot(self.F)
+        self.P = G.dot(self.P).dot(G.T) + V.dot(R).dot(V.T)
 
         return self.x_hat, self.P
 
     def update(self, dt, z, measure):
+
+        zhat = measure(dt, self.x_hat)
+
+
 
         return self.x_hat, self.P
 
@@ -93,7 +79,7 @@ history = []
 
 for t in time:
     u = control(t, x_hat)
-    x, dfdx = dynamics(dt, x, u, noise=False)
+    x, dfdx, dfdu, M = dynamics(dt, x, u, noise=False)
     z = measure(dt, x, Q, noise=False)
 
     x_hat, P = estimator.propagate(dt, u, dynamics)

@@ -10,6 +10,7 @@ LANDMARKS = np.array([[6., 4.]])
 
 def measure(dt, x, Q=None, noise=False):
     z = np.zeros([2 * LANDMARKS.shape[0]])
+    dhdx = np.zeros([2, 3 + 2 * len(LANDMARKS)])
 
     for i, m in enumerate(LANDMARKS):
         q = (m[0] - x[0]) ** 2 + (m[1] - x[1]) ** 2
@@ -17,7 +18,9 @@ def measure(dt, x, Q=None, noise=False):
         z[i * 2 + 1] = np.arctan2(m[1] - x[1], m[0] - x[0]) - x[2]
         z[i * 2 + 1] = np.random.multivariate_normal(z[i * 2 + 1], Q) if noise else z[i * 2 + 1]
 
-    return z
+        #dhdx[3 + 2 * i]
+
+    return z, dhdx
 
 def dynamics(dt, x, u, noise, alphas=np.array([0.01, 0.001, 0.01, 0.001])):
     noise_v = (np.random.randn() * (alphas[0] * u[0] ** 2 + alphas[1] * u[1] ** 2)) if noise else 0
@@ -65,14 +68,23 @@ class EKFSLAM:
 
     def update(self, dt, z, measure):
 
-        zhat = measure(dt, self.x_hat)
+        zhat, H = measure(dt, self.x_hat)
+        error = (z - zhat)
+        # for dx, dy in (zhat - z).reshape(-1, 2):
+        #     print(dx)
 
+        M = H.dot(self.P).dot(H.T) + self.Q
+        Minv = np.linalg.pinv(M)
+        pi = error.T.dot(Minv).dot(error)
+        K = self.P.dot(H.T).dot(Minv)
 
+        self.x_hat += self.P
 
         return self.x_hat, self.P
 
 Q = np.array([[0.01], [0.005]]) * np.eye(2)
 x = np.array([0, 0, 0])
+x = np.hstack([x, np.random.normal(LANDMARKS.reshape([-1]))])
 x_hat = x.copy()
 estimator = EKFSLAM(Q=Q)
 history = []
@@ -80,7 +92,7 @@ history = []
 for t in time:
     u = control(t, x_hat)
     x, dfdx, dfdu, M = dynamics(dt, x, u, noise=False)
-    z = measure(dt, x, Q, noise=False)
+    z, dhdx = measure(dt, x, Q, noise=False)
 
     x_hat, P = estimator.propagate(dt, u, dynamics)
     x_hat, P = estimator.update(dt, z, measure)
